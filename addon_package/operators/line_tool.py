@@ -9,9 +9,9 @@ import bpy
 import bmesh
 from bmesh.types import BMVert
 from bpy.types import Context, Event
+from bpy_extras import view3d_utils
 from mathutils import Matrix, Vector
 from mathutils import geometry as geom
-from bpy_extras import view3d_utils
 
 
 AXIS_VECTORS = {
@@ -64,9 +64,6 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
 
         self._reset_state()
 
-        area = context.area
-        area.tag_redraw()
-
         self._ensure_edit_mesh(context)
         if context.mode != "EDIT_MESH":
             self.report({"WARNING"}, "Failed to enter Edit Mode")
@@ -81,6 +78,7 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
         self._mouse_region = (event.mouse_region_x, event.mouse_region_y)
         self._update_status_text(context, "Line tool started")
 
+        context.window.cursor_set('CROSSHAIR')
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
@@ -91,7 +89,13 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
         if event.type == "MOUSEMOVE":
             self._mouse_region = (event.mouse_region_x, event.mouse_region_y)
             self._preview_world = self._constrained_point_from_event(context, event)
-            self._update_status_text(context, "") # Update for snap status
+            self._update_status_text(context, "")  # Update for snap status
+
+            if self._snap_state.target_vert:
+                context.window.cursor_set('HAND')
+            else:
+                context.window.cursor_set('CROSSHAIR')
+
             return {"RUNNING_MODAL"}
 
         if event.type == "LEFTMOUSE" and event.value == "PRESS":
@@ -110,7 +114,6 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
             return {"RUNNING_MODAL"}
 
         if event.type == "SHIFT" and event.value == "RELEASE":
-            # When releasing shift, clear "exclude" mode but preserve axis.
             if self._constraint.exclude_axis:
                 self._constraint.exclude_axis = False
                 self._update_status_text(context, "Axis constraint reset to single axis")
@@ -200,12 +203,15 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
 
     # ----- helpers -----------------------------------------------------------
     def _finish(self, context: Context, message: str):
+        context.window.cursor_set('DEFAULT')
         if self._bm:
             bmesh.update_edit_mesh(context.edit_object.data, loop_triangles=False)
+
         self._update_status_text(context, message)
         self._constraint = ConstraintState()
         self._numeric_input = ""
         context.area.header_text_set(None)
+        context.area.tag_redraw()
 
     def _reset_state(self):
         self._bm = None
@@ -287,7 +293,6 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
             axis = self._constraint.axis or "X"
             direction = AXIS_VECTORS[axis].copy()
             if self._constraint.exclude_axis:
-                # Use average of remaining axes
                 others = [v for key, v in AXIS_VECTORS.items() if key != axis]
                 direction = (others[0] + others[1]).normalized()
         else:
@@ -335,12 +340,10 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
             return None
 
     def _location_from_event(self, context: Context, event: Event) -> Optional[Vector]:
-        # First, try to snap to existing geometry
         snap_location = self._find_snap_point(context, event)
         if snap_location:
             return snap_location
 
-        # If no snap, use raycasting as before
         region = context.region
         rv3d = context.space_data.region_3d
         coord = (event.mouse_region_x, event.mouse_region_y)
@@ -400,15 +403,18 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
     def _update_status_text(self, context: Context, message: str):
         constraint_label = self._constraint.label()
         snap_label = self._snap_state.label()
-        
-        parts = [f"[Line] {message}"]
+
+        parts = []
+        if message:
+            parts.append(f"[Line] {message}")
+
         if self._start_local:
             parts.append(f"Axis: {constraint_label}")
-        
+
         parts.append(f"Snap: {snap_label}")
 
         if self._numeric_input:
             parts.append(f"Input: {self._numeric_input}")
-            
+
         status = " | ".join(parts)
         context.area.header_text_set(status)
