@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 
 import bpy
 import bmesh
+from bmesh.types import BMVert
 from bpy.types import Context, Event
 from mathutils import Matrix, Vector
 from mathutils import geometry as geom
@@ -31,6 +32,20 @@ class ConstraintState:
         if not self.axis:
             return "Free"
         return f"Shift+{self.axis}" if self.exclude_axis else self.axis
+
+
+@dataclass
+class SnapState:
+    """Represents the current snap state."""
+
+    target_vert: Optional[BMVert] = None
+    target_world: Optional[Vector] = None
+    target_screen: Optional[Vector] = None
+
+    def label(self) -> str:
+        if self.target_vert:
+            return f"Vertex ({self.target_vert.index})"
+        return "None"
 
 
 class VIEW3D_OT_cad_line(bpy.types.Operator):
@@ -76,6 +91,7 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
         if event.type == "MOUSEMOVE":
             self._mouse_region = (event.mouse_region_x, event.mouse_region_y)
             self._preview_world = self._constrained_point_from_event(context, event)
+            self._update_status_text(context, "") # Update for snap status
             return {"RUNNING_MODAL"}
 
         if event.type == "LEFTMOUSE" and event.value == "PRESS":
@@ -201,6 +217,7 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
         self._start_world = None
         self._numeric_input = ""
         self._constraint = ConstraintState()
+        self._snap_state = SnapState()
         self._preview_world = None
         self._mouse_region = (0, 0)
 
@@ -287,7 +304,43 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
         self._constraint.axis = axis
         self._constraint.exclude_axis = shift
 
+    def _find_snap_point(self, context: Context, event: Event) -> Optional[Vector]:
+        """Find the nearest snap point (vertex) to the mouse cursor."""
+        region = context.region
+        rv3d = context.space_data.region_3d
+        mouse_coord = Vector((event.mouse_region_x, event.mouse_region_y))
+
+        best_dist = 10.0  # Snap radius in pixels
+        snap_vert = None
+
+        for v in self._bm.verts:
+            if not v.hide:
+                world_pos = self._matrix_world @ v.co
+                screen_pos = view3d_utils.location_3d_to_region_2d(region, rv3d, world_pos)
+                if screen_pos:
+                    dist = (mouse_coord - screen_pos).length
+                    if dist < best_dist:
+                        best_dist = dist
+                        snap_vert = v
+
+        if snap_vert:
+            self._snap_state.target_vert = snap_vert
+            self._snap_state.target_world = self._matrix_world @ snap_vert.co
+            self._snap_state.target_screen = view3d_utils.location_3d_to_region_2d(
+                region, rv3d, self._snap_state.target_world
+            )
+            return self._snap_state.target_world
+        else:
+            self._snap_state = SnapState()
+            return None
+
     def _location_from_event(self, context: Context, event: Event) -> Optional[Vector]:
+        # First, try to snap to existing geometry
+        snap_location = self._find_snap_point(context, event)
+        if snap_location:
+            return snap_location
+
+        # If no snap, use raycasting as before
         region = context.region
         rv3d = context.space_data.region_3d
         coord = (event.mouse_region_x, event.mouse_region_y)
@@ -346,7 +399,16 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
 
     def _update_status_text(self, context: Context, message: str):
         constraint_label = self._constraint.label()
-        status = f"[Line] {message} | Axis: {constraint_label}"
+        snap_label = self._snap_state.label()
+        
+        parts = [f"[Line] {message}"]
+        if self._start_local:
+            parts.append(f"Axis: {constraint_label}")
+        
+        parts.append(f"Snap: {snap_label}")
+
         if self._numeric_input:
-            status += f" | Input: {self._numeric_input}"
+            parts.append(f"Input: {self._numeric_input}")
+            
+        status = " | ".join(parts)
         context.area.header_text_set(status)
