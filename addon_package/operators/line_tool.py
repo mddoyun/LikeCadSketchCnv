@@ -38,13 +38,15 @@ class ConstraintState:
 class SnapState:
     """Represents the current snap state."""
 
-    target_vert: Optional[BMVert] = None
+    snap_type: Optional[str] = None
     target_world: Optional[Vector] = None
     target_screen: Optional[Vector] = None
 
     def label(self) -> str:
-        if self.target_vert:
-            return f"Vertex ({self.target_vert.index})"
+        if self.snap_type == 'VERTEX':
+            return "Vertex"
+        if self.snap_type == 'MIDPOINT':
+            return "Midpoint"
         return "None"
 
 
@@ -74,6 +76,7 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
         self._matrix_world_inv = self._matrix_world.inverted()
         self._bm = bmesh.from_edit_mesh(self._active_obj.data)
         self._bm.verts.ensure_lookup_table()
+        self._bm.edges.ensure_lookup_table()
 
         self._mouse_region = (event.mouse_region_x, event.mouse_region_y)
         self._update_status_text(context, "Line tool started")
@@ -91,8 +94,10 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
             self._preview_world = self._constrained_point_from_event(context, event)
             self._update_status_text(context, "")  # Update for snap status
 
-            if self._snap_state.target_vert:
+            if self._snap_state.snap_type == 'VERTEX':
                 context.window.cursor_set('HAND')
+            elif self._snap_state.snap_type == 'MIDPOINT':
+                context.window.cursor_set('PAINT_CROSS')
             else:
                 context.window.cursor_set('CROSSHAIR')
 
@@ -310,34 +315,58 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
         self._constraint.exclude_axis = shift
 
     def _find_snap_point(self, context: Context, event: Event) -> Optional[Vector]:
-        """Find the nearest snap point (vertex) to the mouse cursor."""
+        """Find the nearest snap point (vertex or edge midpoint) to the mouse cursor."""
         region = context.region
         rv3d = context.space_data.region_3d
         mouse_coord = Vector((event.mouse_region_x, event.mouse_region_y))
+        snap_radius = 10.0
 
-        best_dist = 10.0  # Snap radius in pixels
+        # --- Vertex Snapping (Highest Priority) ---
+        best_vert_dist = snap_radius
         snap_vert = None
-
         for v in self._bm.verts:
             if not v.hide:
                 world_pos = self._matrix_world @ v.co
                 screen_pos = view3d_utils.location_3d_to_region_2d(region, rv3d, world_pos)
                 if screen_pos:
                     dist = (mouse_coord - screen_pos).length
-                    if dist < best_dist:
-                        best_dist = dist
+                    if dist < best_vert_dist:
+                        best_vert_dist = dist
                         snap_vert = v
 
         if snap_vert:
-            self._snap_state.target_vert = snap_vert
+            self._snap_state.snap_type = 'VERTEX'
             self._snap_state.target_world = self._matrix_world @ snap_vert.co
             self._snap_state.target_screen = view3d_utils.location_3d_to_region_2d(
                 region, rv3d, self._snap_state.target_world
             )
             return self._snap_state.target_world
-        else:
-            self._snap_state = SnapState()
-            return None
+
+        # --- Edge Midpoint Snapping ---
+        best_midpoint_dist = snap_radius
+        snap_midpoint_world = None
+        for e in self._bm.edges:
+            if not e.hide:
+                midpoint_local = (e.verts[0].co + e.verts[1].co) / 2.0
+                midpoint_world = self._matrix_world @ midpoint_local
+                screen_pos = view3d_utils.location_3d_to_region_2d(region, rv3d, midpoint_world)
+                if screen_pos:
+                    dist = (mouse_coord - screen_pos).length
+                    if dist < best_midpoint_dist:
+                        best_midpoint_dist = dist
+                        snap_midpoint_world = midpoint_world
+
+        if snap_midpoint_world:
+            self._snap_state.snap_type = 'MIDPOINT'
+            self._snap_state.target_world = snap_midpoint_world
+            self._snap_state.target_screen = view3d_utils.location_3d_to_region_2d(
+                region, rv3d, self._snap_state.target_world
+            )
+            return self._snap_state.target_world
+
+        # --- No snap found ---
+        self._snap_state = SnapState()
+        return None
 
     def _location_from_event(self, context: Context, event: Event) -> Optional[Vector]:
         snap_location = self._find_snap_point(context, event)
