@@ -7,9 +7,11 @@ from typing import Optional, Tuple
 
 import bpy
 import bmesh
+import gpu
 from bmesh.types import BMVert
 from bpy.types import Context, Event
 from bpy_extras import view3d_utils
+from gpu_extras.batch import batch_for_shader
 from mathutils import Matrix, Vector
 from mathutils import geometry as geom
 
@@ -82,10 +84,15 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
         self._update_status_text(context, "Line tool started")
 
         context.window.cursor_set('CROSSHAIR')
+        self._draw_handler_3d = bpy.types.SpaceView3D.draw_handler_add(
+            self._draw_callback_3d, (self, context), 'WINDOW', 'POST_VIEW'
+        )
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
     def modal(self, context: Context, event: Event):
+        context.area.tag_redraw()
+
         if event.type in {"MIDDLEMOUSE", "WHEELUPMOUSE", "WHEELDOWNMOUSE"}:
             return {"PASS_THROUGH"}
 
@@ -206,9 +213,25 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
 
         return {"RUNNING_MODAL"}
 
+    # ----- drawing -----------------------------------------------------------
+    def _draw_callback_3d(self, context):
+        if self._start_world and self._preview_world:
+            coords = [self._start_world, self._preview_world]
+            shader = gpu.shader.from_builtin('3D_UNIFORM_COLOR')
+            batch = batch_for_shader(shader, 'LINES', {"pos": coords})
+
+            shader.bind()
+            shader.uniform_float("color", (0.0, 0.0, 0.0, 1.0))  # Black
+            gpu.state.line_width_set(2)
+            batch.draw(shader)
+
     # ----- helpers -----------------------------------------------------------
     def _finish(self, context: Context, message: str):
         context.window.cursor_set('DEFAULT')
+        if self._draw_handler_3d:
+            bpy.types.SpaceView3D.draw_handler_remove(self._draw_handler_3d, 'WINDOW')
+            self._draw_handler_3d = None
+
         if self._bm:
             bmesh.update_edit_mesh(context.edit_object.data, loop_triangles=False)
 
@@ -231,6 +254,7 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
         self._snap_state = SnapState()
         self._preview_world = None
         self._mouse_region = (0, 0)
+        self._draw_handler_3d = None
 
     def _ensure_edit_mesh(self, context: Context):
         if context.mode != "OBJECT":
