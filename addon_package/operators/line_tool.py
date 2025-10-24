@@ -85,7 +85,7 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
 
         context.window.cursor_set('CROSSHAIR')
         self._draw_handler_3d = bpy.types.SpaceView3D.draw_handler_add(
-            self._draw_callback_3d, (self, context), 'WINDOW', 'POST_VIEW'
+            self._draw_callback_3d, (context,), 'WINDOW', 'POST_VIEW'
         )
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
@@ -113,7 +113,7 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
         if event.type == "LEFTMOUSE" and event.value == "PRESS":
             return self._handle_left_click(context, event)
 
-        if event.type == "RET" and event.value == "PRESS":
+        if event.type in {"RET", "NUMPAD_ENTER", "SPACE"} and event.value == "PRESS":
             return self._handle_confirm_numeric(context)
 
         if event.type == "ESC":
@@ -137,12 +137,13 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
                 self._update_status_text(context, f"Input: {self._numeric_input or '…'}")
             return {"RUNNING_MODAL"}
 
-        if event.value == "PRESS" and event.type in self._accepted_numeric(event):
-            char = self._event_to_char(event)
-            if char:
-                self._numeric_input += char
-                self._update_status_text(context, f"Input: {self._numeric_input}")
-            return {"RUNNING_MODAL"}
+        if event.value == "PRESS":
+            if event.type in self._accepted_numeric(event):
+                char = self._event_to_char(event)
+                if char:
+                    self._numeric_input += char
+                    self._update_status_text(context, f"Input: {self._numeric_input}")
+                return {"RUNNING_MODAL"}
 
         return {"RUNNING_MODAL"}
 
@@ -215,15 +216,19 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
 
     # ----- drawing -----------------------------------------------------------
     def _draw_callback_3d(self, context):
+        print("Draw callback 3D called.")
         if self._start_world and self._preview_world:
+            print(f"Drawing line from {self._start_world} to {self._preview_world}")
             coords = [self._start_world, self._preview_world]
-            shader = gpu.shader.from_builtin('3D_UNIFORM_COLOR')
+            shader = gpu.shader.from_builtin('UNIFORM_COLOR')
             batch = batch_for_shader(shader, 'LINES', {"pos": coords})
 
             shader.bind()
             shader.uniform_float("color", (0.0, 0.0, 0.0, 1.0))  # Black
             gpu.state.line_width_set(2)
             batch.draw(shader)
+        else:
+            print(f"Not drawing: _start_world={self._start_world}, _preview_world={self._preview_world}")
 
     # ----- helpers -----------------------------------------------------------
     def _finish(self, context: Context, message: str):
@@ -422,34 +427,21 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
 
     def _accepted_numeric(self, event: Event):
         return {
-            "ZERO",
-            "ONE",
-            "TWO",
-            "THREE",
-            "FOUR",
-            "FIVE",
-            "SIX",
-            "SEVEN",
-            "EIGHT",
-            "NINE",
-            "PERIOD",
-            "MINUS",
+            "ZERO", "ONE", "TWO", "THREE", "FOUR",
+            "FIVE", "SIX", "SEVEN", "EIGHT", "NINE",
+            "NUMPAD_0", "NUMPAD_1", "NUMPAD_2", "NUMPAD_3", "NUMPAD_4",
+            "NUMPAD_5", "NUMPAD_6", "NUMPAD_7", "NUMPAD_8", "NUMPAD_9",
+            "PERIOD", "MINUS", "NUMPAD_PERIOD", "NUMPAD_MINUS",
         }
 
     def _event_to_char(self, event: Event) -> Optional[str]:
         mapping = {
-            "ZERO": "0",
-            "ONE": "1",
-            "TWO": "2",
-            "THREE": "3",
-            "FOUR": "4",
-            "FIVE": "5",
-            "SIX": "6",
-            "SEVEN": "7",
-            "EIGHT": "8",
-            "NINE": "9",
-            "PERIOD": ".",
-            "MINUS": "-" if not event.shift else None,
+            "ZERO": "0", "ONE": "1", "TWO": "2", "THREE": "3", "FOUR": "4",
+            "FIVE": "5", "SIX": "6", "SEVEN": "7", "EIGHT": "8", "NINE": "9",
+            "NUMPAD_0": "0", "NUMPAD_1": "1", "NUMPAD_2": "2", "NUMPAD_3": "3", "NUMPAD_4": "4",
+            "NUMPAD_5": "5", "NUMPAD_6": "6", "NUMPAD_7": "7", "NUMPAD_8": "8", "NUMPAD_9": "9",
+            "PERIOD": ".", "NUMPAD_PERIOD": ".",
+            "MINUS": "-" if not event.shift else None, "NUMPAD_MINUS": "-" if not event.shift else None,
         }
         return mapping.get(event.type)
 
