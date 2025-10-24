@@ -14,6 +14,7 @@ def draw_header_button(self, context):
     row = layout.row(align=True)
     row.enabled = is_mesh_context
     row.operator("view3d.cad_line", text="Line", icon="MESH_DATA")
+    row.operator("view3d.cad_trim", text="Trim", icon="TRASH")
 
 
 def register():

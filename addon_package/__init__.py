@@ -3,6 +3,7 @@
 import bpy
 
 from .operators.line_tool import VIEW3D_OT_cad_line
+from .operators.trim_tool import VIEW3D_OT_cad_trim
 from .ui import header as ui_header
 
 bl_info = {
@@ -18,6 +19,7 @@ bl_info = {
 
 classes = (
     VIEW3D_OT_cad_line,
+    VIEW3D_OT_cad_trim,
 )
 
 
