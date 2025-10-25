@@ -1,10 +1,15 @@
 """Addon entry point for LikeCadSketch Blender add-on."""
 
 import bpy
+import importlib
 
-from .operators.line_tool import VIEW3D_OT_cad_line
-from .operators.trim_tool import VIEW3D_OT_cad_trim
+from .operators import line_tool
+from .operators import trim_tool
 from .ui import header as ui_header
+
+# Force reload during development
+importlib.reload(line_tool)
+importlib.reload(trim_tool)
 
 bl_info = {
     "name": "Like CAD Sketch",
@@ -18,8 +23,8 @@ bl_info = {
 
 
 classes = (
-    VIEW3D_OT_cad_line,
-    VIEW3D_OT_cad_trim,
+    line_tool.VIEW3D_OT_cad_line,
+    trim_tool.VIEW3D_OT_cad_trim,
 )
 
 

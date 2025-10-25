@@ -37,9 +37,12 @@ class VIEW3D_OT_cad_trim(Operator):
     def modal(self, context: Context, event: Event):
         context.area.tag_redraw()
 
-        if event.type == "ESC":
+        if event.type in {"ESC"}:
             self.report({"INFO"}, "CAD Trim tool cancelled.")
             return {"CANCELLED"}
+
+        if event.type in {"MIDDLEMOUSE", "WHEELUPMOUSE", "WHEELDOWNMOUSE"}:
+            return {"PASS_THROUGH"}
 
         if self._state == 'SELECT_CUTTING_EDGES':
             if event.type == "LEFTMOUSE" and event.value == "PRESS":
@@ -47,7 +50,7 @@ class VIEW3D_OT_cad_trim(Operator):
             elif event.type == "RIGHTMOUSE" and event.value == "PRESS":
                 if not self._cutting_edges:
                     self.report({"WARNING"}, "No cutting edges selected. Right-click again to cancel.")
-                    return {"CANCELLED"} # Changed to CANCELLED to exit if no cutting edges
+                    return {"CANCELLED"}
                 self._state = 'SELECT_EDGES_TO_TRIM'
                 self.report({"INFO"}, "Cutting edges confirmed. Select edges to trim (Left-click).")
 
@@ -71,11 +74,11 @@ class VIEW3D_OT_cad_trim(Operator):
         proj = ap.dot(ab)
         ab_len_sq = ab.length_squared
 
-        if ab_len_sq == 0.0: # a and b are the same point
+        if ab_len_sq == 0.0:
             return a
 
         t = proj / ab_len_sq
-        t = max(0.0, min(1.0, t)) # Clamp t to [0, 1]
+        t = max(0.0, min(1.0, t))
 
         closest_point = a + t * ab
         return closest_point
@@ -90,8 +93,7 @@ class VIEW3D_OT_cad_trim(Operator):
 
         closest_screen_dist_sq = float('inf')
         closest_bmedge = None
-        
-        screen_threshold_sq = 10 * 10 # 10 pixels tolerance
+        screen_threshold_sq = 10 * 10
 
         for edge in self._bm.edges:
             if edge.hide:
@@ -104,12 +106,11 @@ class VIEW3D_OT_cad_trim(Operator):
             v2_screen = view3d_utils.location_3d_to_region_2d(region, rv3d, v2_world)
 
             if v1_screen is None or v2_screen is None:
-                continue # Edge is not visible on screen
+                continue
 
             closest_point_on_screen_edge = self._closest_point_on_line_segment(
                 mouse_coord, v1_screen, v2_screen
             )
-
             dist_sq = (closest_point_on_screen_edge - mouse_coord).length_squared
             
             if dist_sq < closest_screen_dist_sq and dist_sq < screen_threshold_sq:
@@ -118,28 +119,30 @@ class VIEW3D_OT_cad_trim(Operator):
         
         if closest_bmedge:
             ray_origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, mouse_coord)
+            ray_vector = view3d_utils.region_2d_to_vector_3d(region, rv3d, mouse_coord)
+            ray_target = ray_origin + ray_vector * 10000
+
             v1_world = self._active_obj.matrix_world @ closest_bmedge.verts[0].co
             v2_world = self._active_obj.matrix_world @ closest_bmedge.verts[1].co
-            
-            closest_point_on_3d_edge_to_ray = self._closest_point_on_line_segment(
-                ray_origin, v1_world, v2_world
+
+            _, intersect_pt_on_edge = geometry.intersect_line_line(
+                ray_origin, ray_target, v1_world, v2_world
             )
             
-            return closest_bmedge, closest_point_on_3d_edge_to_ray
+            return closest_bmedge, intersect_pt_on_edge
             
         return None, None
 
     def _select_cutting_edge(self, context: Context, event: Event):
-        edge_and_loc = self._ray_cast_edge(context, event)
-        if edge_and_loc and edge_and_loc[0]: # Check if edge is found (first element of tuple)
-            edge = edge_and_loc[0]
+        edge, _ = self._ray_cast_edge(context, event)
+        if edge:
             if edge not in self._cutting_edges:
                 self._cutting_edges.append(edge)
-                edge.select_set(True)  # Select in Blender viewport
+                edge.select_set(True)
                 self.report({"INFO"}, f"Cutting edge {edge.index} selected: {len(self._cutting_edges)} edges.")
             else:
                 self._cutting_edges.remove(edge)
-                edge.select_set(False) # Deselect in Blender viewport
+                edge.select_set(False)
                 self.report({"INFO"}, f"Cutting edge {edge.index} deselected: {len(self._cutting_edges)} edges.")
         else:
             self.report({"WARNING"}, "No edge found under mouse.")
@@ -148,22 +151,18 @@ class VIEW3D_OT_cad_trim(Operator):
         edge_to_trim, mouse_world_loc = self._ray_cast_edge(context, event)
         if not edge_to_trim:
             self.report({"WARNING"}, "No edge found under mouse to trim.")
-            context.area.tag_redraw()
             return
 
-        # Collect original vertex coordinates of the edge to trim (store as Vectors)
         original_v1_co = edge_to_trim.verts[0].co.copy()
         original_v2_co = edge_to_trim.verts[1].co.copy()
-        edge_vec_norm = (original_v2_co - original_v1_co).normalized()
 
         intersections_with_factors = []
         for cutting_edge in self._cutting_edges:
             if cutting_edge == edge_to_trim:
-                continue # Don't trim an edge with itself
+                continue
 
             intersection_point = self._get_intersection_point(edge_to_trim, cutting_edge)
             if intersection_point:
-                # Calculate factor along edge_to_trim
                 edge_vec = original_v2_co - original_v1_co
                 if edge_vec.length_squared == 0.0:
                     continue
@@ -172,36 +171,23 @@ class VIEW3D_OT_cad_trim(Operator):
 
         if not intersections_with_factors:
             self.report({"INFO"}, "No intersections found with cutting edges.")
-            context.area.tag_redraw()
             return
 
-        # Sort intersections by factor along the edge
         intersections_with_factors.sort(key=lambda x: x[0])
         intersection_points = [p for f, p in intersections_with_factors]
 
-        # Deselect the edge before splitting to avoid issues with selection state
-        edge_to_trim.select_set(False)
-
-        # Subdivide the edge at all intersection points
         if not edge_to_trim.is_valid:
-            self.report({"ERROR"}, "Edge to trim is invalid.")
+            self.report({"ERROR"}, "Edge to trim is invalid before subdivision.")
             return
 
-        # Subdivide the edge multiple times
         num_cuts = len(intersection_points)
         if num_cuts == 0:
-            self.report({"INFO"}, "No valid intersection points to subdivide.")
-            context.area.tag_redraw()
             return
 
-        # Select the edge to subdivide
-        edge_to_trim.select_set(True) # Ensure it's selected for ops.subdivide_edges
-        ret = bmesh.ops.subdivide_edges(self._bm, edges=[edge_to_trim], cuts=num_cuts, smooth=0, seed=0)
+        ret = bmesh.ops.subdivide_edges(self._bm, edges=[edge_to_trim], cuts=num_cuts)
         
-        new_verts = [geom_elem for geom_elem in ret['geom_split'] if isinstance(geom_elem, bmesh.types.BMVert)]
-        
-        # Sort new_verts by their position along the original edge
-        # This is important to match them with sorted intersection_points
+        new_verts = [v for v in ret['geom_split'] if isinstance(v, bmesh.types.BMVert)]
+        edge_vec_norm = (original_v2_co - original_v1_co).normalized()
         new_verts.sort(key=lambda v: (v.co - original_v1_co).dot(edge_vec_norm))
 
         if len(new_verts) == num_cuts:
@@ -209,34 +195,19 @@ class VIEW3D_OT_cad_trim(Operator):
                 vert.co = intersection_points[i]
         else:
             self.report({"WARNING"}, "Mismatch in number of new vertices and intersection points.")
-            # Fallback: just use the first intersection point and split once
-            edge_to_trim.select_set(True)
-            ret = bmesh.ops.subdivide_edges(self._bm, edges=[edge_to_trim], cuts=1, smooth=0, seed=0)
-            new_vert = None
-            for geom_elem in ret['geom_split']:
-                if isinstance(geom_elem, bmesh.types.BMVert):
-                    new_vert = geom_elem
-                    break
-            if new_vert:
-                new_vert.co = intersection_points[0]
-            else:
-                self.report({"ERROR"}, "Failed to subdivide edge for fallback.")
-                context.area.tag_redraw()
-                return
 
-        # Now, identify the segment to delete
-        # We need to find which of the new edges contains the mouse_world_loc
-        all_new_edges = []
-        for vert in new_verts:
-            for edge in vert.link_edges:
-                if edge.is_valid and edge not in all_new_edges:
-                    all_new_edges.append(edge)
-        
-        # Find the edge segment that contains the mouse_world_loc
+        all_new_edges = [e for e in ret['geom_split'] if isinstance(e, bmesh.types.BMEdge)]
+        if not all_new_edges:
+            self.report({"WARNING"}, "Edge split did not result in any new edges.")
+            return
+
         edge_to_delete = None
-        min_dist_sq = float('inf')
+        min_dist_sq_to_click = float('inf')
 
         for edge_segment in all_new_edges:
+            if not edge_segment.is_valid:
+                continue
+
             v1_world = self._active_obj.matrix_world @ edge_segment.verts[0].co
             v2_world = self._active_obj.matrix_world @ edge_segment.verts[1].co
             
@@ -245,19 +216,16 @@ class VIEW3D_OT_cad_trim(Operator):
             )
             dist_sq = (closest_point_on_segment - mouse_world_loc).length_squared
             
-            # If the click is very close to this segment, this is the one to delete
-            # Use a small tolerance for this check
-            if dist_sq < min_dist_sq and dist_sq < (0.1 * 0.1): # 0.1 Blender unit tolerance
-                min_dist_sq = dist_sq
+            if dist_sq < min_dist_sq_to_click:
+                min_dist_sq_to_click = dist_sq
                 edge_to_delete = edge_segment
-
-        if edge_to_delete:
+        
+        if edge_to_delete and edge_to_delete.is_valid:
             bmesh.ops.delete(self._bm, geom=[edge_to_delete], context='EDGES')
-            self.report({"INFO"}, f"Edge trimmed.")
+            self.report({"INFO"}, "Edge successfully trimmed.")
         else:
-            self.report({"WARNING"}, "Could not determine which segment to delete based on click location.")
+            self.report({"WARNING"}, "Could not determine which segment to delete.")
 
-        # Update bmesh and viewport
         bmesh.update_edit_mesh(self._active_obj.data)
         self._bm.edges.ensure_lookup_table()
         context.area.tag_redraw()
@@ -272,19 +240,13 @@ class VIEW3D_OT_cad_trim(Operator):
         e2_v1_world = matrix_world @ edge2.verts[0].co
         e2_v2_world = matrix_world @ edge2.verts[1].co
 
-        # Use mathutils.geometry.intersect_line_line for closest points on infinite lines
         p1, p2 = geometry.intersect_line_line(e1_v1_world, e1_v2_world, e2_v1_world, e2_v2_world)
 
         EPSILON = 0.0001
 
-        # Check if the infinite lines actually intersect (p1 and p2 are very close)
         if (p1 - p2).length_squared < EPSILON:
-            # Lines intersect, now check if the intersection point lies within both segments
-            
-            # Check if p1 is on segment e1
             on_segment1 = (p1 - e1_v1_world).length_squared + (p1 - e1_v2_world).length_squared \
                           <= (e1_v1_world - e1_v2_world).length_squared + EPSILON
-            # Check if p1 is on segment e2 (using p1 as the intersection point)
             on_segment2 = (p1 - e2_v1_world).length_squared + (p1 - e2_v2_world).length_squared \
                           <= (e2_v1_world - e2_v2_world).length_squared + EPSILON
 
