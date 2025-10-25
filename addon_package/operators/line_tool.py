@@ -93,7 +93,7 @@ class VIEW3D_OT_cad_line(bpy.types.Operator):
     def modal(self, context: Context, event: Event):
         context.area.tag_redraw()
 
-        if event.type in {"MIDDLEMOUSE", "WHEELUPMOUSE", "WHEELDOWNMOUSE"}:
+        if event.type in {"MIDDLEMOUSE", "WHEELUPMOUSE", "WHEELDOWNMOUSE", "TRACKPADPAN", "TRACKPADZOOM"}:
             return {"PASS_THROUGH"}
 
         if event.type == "MOUSEMOVE":

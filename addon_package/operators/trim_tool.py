@@ -41,7 +41,7 @@ class VIEW3D_OT_cad_trim(Operator):
             self.report({"INFO"}, "CAD Trim tool cancelled.")
             return {"CANCELLED"}
 
-        if event.type in {"MIDDLEMOUSE", "WHEELUPMOUSE", "WHEELDOWNMOUSE"}:
+        if event.type in {"MIDDLEMOUSE", "WHEELUPMOUSE", "WHEELDOWNMOUSE", "TRACKPADPAN", "TRACKPADZOOM"}:
             return {"PASS_THROUGH"}
 
         if self._state == 'SELECT_CUTTING_EDGES':
